@@ -2,7 +2,8 @@ name: Build APK
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -17,6 +18,7 @@ jobs:
     timeout-minutes: 35
 
     steps:
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -24,26 +26,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -f settings.gradle || { echo "settings.gradle missing"; exit 1; }
-          test -f build.gradle || { echo "project build.gradle missing"; exit 1; }
-          test -f app/build.gradle || { echo "app/build.gradle missing"; exit 1; }
-          test -f app/src/main/AndroidManifest.xml || { echo "AndroidManifest.xml missing"; exit 1; }
-          mkdir -p app/src/main/res/drawable
-          if ! ls app/src/main/res/drawable/app_icon.* >/dev/null 2>&1; then
-            cat > app/src/main/res/drawable/app_icon.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="108dp"
-              android:height="108dp"
-              android:viewportWidth="108"
-              android:viewportHeight="108">
-              <path android:fillColor="#4f46e5" android:pathData="M0,0h108v108h-108z"/>
-              <path android:fillColor="#ffffff" android:pathData="M24,24h60v60h-60z"/>
-              <path android:fillColor="#4f46e5" android:pathData="M32,32h44v44h-44z"/>
-              <path android:fillColor="#ffffff" android:pathData="M49,36h10v36h-10zM36,49h36v10h-36z"/>
-          </vector>
-          EOF
-          fi
+
+          test -f settings.gradle || {
+            echo "settings.gradle missing"
+            exit 1
+          }
+
+          test -f build.gradle || {
+            echo "project build.gradle missing"
+            exit 1
+          }
+
+          test -f app/build.gradle || {
+            echo "app/build.gradle missing"
+            exit 1
+          }
+
+          test -f app/src/main/AndroidManifest.xml || {
+            echo "AndroidManifest.xml missing"
+            exit 1
+          }
+
+          echo "Android project files OK"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -58,39 +62,118 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
 
+      - name: Show project information
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "================================="
+          echo "MOD HUB - BUILD"
+          echo "================================="
+
+          java -version
+          gradle --version
+
+          echo "================================="
+          echo "Project files"
+          echo "================================="
+
+          ls -la
+          ls -la app
+          ls -la app/src/main
+
       - name: Build Debug APK
         shell: bash
         run: |
           set -euo pipefail
-          gradle :app:assembleDebug --stacktrace --no-daemon
-          mkdir -p dist
-          APK_PATH="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n 1)"
-          test -n "$APK_PATH" || { echo "Debug APK was not produced"; exit 1; }
-          cp "$APK_PATH" "dist/${{ github.event.repository.name }}-debug.apk"
 
-      - name: Build Release AAB (optional)
+          echo "Building MOD HUB Debug APK..."
+
+          gradle :app:assembleDebug \
+            --stacktrace \
+            --no-daemon
+
+          mkdir -p dist
+
+          APK_PATH="$(find app/build/outputs/apk/debug \
+            -type f \
+            -name '*.apk' \
+            | head -n 1)"
+
+          if [ -z "$APK_PATH" ]; then
+            echo "ERROR: Debug APK was not produced"
+            exit 1
+          fi
+
+          echo "APK found:"
+          echo "$APK_PATH"
+
+          cp "$APK_PATH" \
+            "dist/${{ github.event.repository.name }}-debug.apk"
+
+          echo "Debug APK copied to dist"
+
+      - name: Check APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f dist/${{ github.event.repository.name }}-debug.apk || {
+            echo "Debug APK missing from dist"
+            exit 1
+          }
+
+          ls -lh dist/
+
+          echo "APK check OK"
+
+      - name: Build Release AAB
         shell: bash
         continue-on-error: true
         run: |
-          gradle :app:bundleRelease --stacktrace --no-daemon
+          set -euo pipefail
+
+          echo "Building Release AAB..."
+
+          gradle :app:bundleRelease \
+            --stacktrace \
+            --no-daemon
+
           mkdir -p dist
-          AAB_PATH="$(find app/build/outputs/bundle/release -type f -name '*.aab' | head -n 1 || true)"
+
+          AAB_PATH="$(find app/build/outputs/bundle/release \
+            -type f \
+            -name '*.aab' \
+            | head -n 1 || true)"
+
           if [ -n "$AAB_PATH" ]; then
-            cp "$AAB_PATH" "dist/${{ github.event.repository.name }}-release.aab"
+            echo "AAB found:"
+            echo "$AAB_PATH"
+
+            cp "$AAB_PATH" \
+              "dist/${{ github.event.repository.name }}-release.aab"
+          else
+            echo "Release AAB was not produced."
+            echo "Debug APK will still be available."
           fi
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: debug-apk
+          name: mod-hub-debug-apk
           path: dist/*-debug.apk
           if-no-files-found: error
           retention-days: 30
@@ -99,16 +182,16 @@ jobs:
         uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
-          name: release-aab
+          name: mod-hub-release-aab
           path: dist/*-release.aab
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Create Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: "Build #${{ github.run_number }}"
+          name: "MOD HUB Build #${{ github.run_number }}"
           make_latest: true
           files: dist/*
         env:
